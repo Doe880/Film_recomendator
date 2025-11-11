@@ -1,8 +1,8 @@
 import os
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import RedirectResponse, PlainTextResponse
 import httpx
 from dotenv import load_dotenv
 import re
@@ -12,55 +12,42 @@ load_dotenv()
 
 KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
 if not KINOPOISK_API_KEY:
-    raise RuntimeError("Не найден переменной окружения KINOPOISK_API_KEY. Проверь .env / переменные окружения.")
+    raise RuntimeError("Не найден переменной окружения KINOPOISK_API_KEY. Проверь .env / Render → Environment.")
 
 app = FastAPI(title="Movie Recommender (Kinopoisk.dev)")
 
-# --- CORS: читаем список из ALLOWED_ORIGINS, убираем пробелы и пустые элементы
+# --- CORS
 raw_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 allowed_origins = [o.strip() for o in raw_origins if o.strip()]
-if allowed_origins == ["*"]:
-    allow_origins_cfg = ["*"]
-else:
-    # В Origin НЕТ пути — только https://doe880.github.io
-    # Пример: ALLOWED_ORIGINS=https://doe880.github.io
-    allow_origins_cfg = allowed_origins
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins_cfg,
+    allow_origins=allowed_origins if allowed_origins != ["*"] else ["*"],
     allow_credentials=False,
-    allow_methods=["GET", "OPTIONS"],  # OPTIONS полезен для preflight
+    allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
 )
 
 BASE_URL = "https://api.kinopoisk.dev/v1.4/movie"
 
-# --- Middleware: схлопываем повторные слэши в пути (исправляет //movies)
+# --- Схлопываем // в / (если фронт случайно дал двойной слэш)
 @app.middleware("http")
-async def normalize_slashes(request, call_next):
+async def normalize_slashes(request: Request, call_next):
     path = request.scope.get("path", "")
     if "//" in path:
         request.scope["path"] = re.sub(r"//+", "/", path)
     return await call_next(request)
 
 def simplify(movie: Dict[str, Any]) -> Dict[str, Any]:
-    # Безопасно вытаскиваем поля
     name = movie.get("name") or movie.get("alternativeName") or "Без названия"
     poster = (movie.get("poster") or {}).get("url")
     rating = None
-    rating_block = movie.get("rating") or {}
-    # Пытаемся взять kp/imdb, округляем до десятых
-    for key in ("kp", "imdb", "filmCritics", "await"):
-        val = rating_block.get(key)
+    for key, block in (("rating", movie.get("rating") or {}),):
+        val = block.get("kp") or block.get("imdb") or block.get("filmCritics") or block.get("await")
         if isinstance(val, (int, float)):
             rating = round(float(val), 1)
-            break
-
     description = movie.get("shortDescription") or movie.get("description")
     year = movie.get("year")
     genres = [g.get("name") for g in (movie.get("genres") or []) if g.get("name")]
-
     return {
         "id": movie.get("id") or movie.get("_id"),
         "name": name,
@@ -72,11 +59,15 @@ def simplify(movie: Dict[str, Any]) -> Dict[str, Any]:
         "url": movie.get("webUrl") or movie.get("externalId", {}).get("kpHD"),
     }
 
-# --- Корень и служебные маршруты
+# --- Служебные маршруты (уберут 404 на / и /favicon.ico)
 @app.get("/", include_in_schema=False)
 def root():
-    # редирект на Swagger, чтобы не было 404 в логах
-    return RedirectResponse(url="/docs")
+    return RedirectResponse("/docs")
+
+@app.get("/favicon.ico", include_in_schema=False)
+@app.get("/favicon.png", include_in_schema=False)
+def favicon():
+    return PlainTextResponse("", status_code=204)
 
 @app.get("/robots.txt", include_in_schema=False)
 def robots():
@@ -91,17 +82,13 @@ async def health():
 async def get_movies(
     genre: str = Query(..., description="Жанр на русском, например: комедия"),
     min_rating: Optional[float] = Query(0.0, ge=0.0, le=10.0, description="Минимальный рейтинг (0-10)"),
-    page: int = Query(1, ge=1, description="Страница результатов (пагинация)"),
+    page: int = Query(1, ge=1, description="Страница результатов"),
     limit: int = Query(20, ge=1, le=50, description="Размер страницы (1-50)")
 ):
-    """
-    Возвращает список фильмов по жанру и фильтру по рейтингу. Метаданные — на русском.
-    """
-    # Формируем запрос к Kinopoisk.dev
     query_params = {
         "page": page,
         "limit": limit,
-        "genres.name": genre,         # жанр на русском
+        "genres.name": genre,
         "selectFields": ",".join([
             "id", "name", "alternativeName", "poster", "rating",
             "description", "shortDescription", "year", "genres", "webUrl", "externalId"
@@ -109,41 +96,43 @@ async def get_movies(
         "sortField": "rating.kp",
         "sortType": "-1",
     }
-
-    # Фильтр по рейтингу
-    if min_rating is not None and min_rating > 0:
+    if min_rating and min_rating > 0:
         query_params["rating.kp"] = f"{min_rating}-10"
 
     headers = {
         "X-API-KEY": KINOPOISK_API_KEY,
         "Accept": "application/json",
-        # На всякий случай просим русский (API обычно и так отдаёт RU)
         "Accept-Language": "ru",
     }
 
     t0 = time.perf_counter()
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.get(BASE_URL, params=query_params, headers=headers)
     except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Не удалось обратиться к kinopoisk.dev: {e}") from e
+        # сеть/днс/таймаут — 502 наружу
+        raise HTTPException(status_code=502, detail=f"Сеть/таймаут до kinopoisk.dev: {e}") from e
 
-    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    elapsed = int((time.perf_counter() - t0) * 1000)
+    ct = resp.headers.get("content-type", "")
 
-    # Явно обрабатываем ошибки источника
+    # Явные ветки по статусам источника
     if resp.status_code == 401:
-        raise HTTPException(500, "Неверный или отсутствующий X-API-KEY для kinopoisk.dev")
+        # На Render не подхватился ключ или неверный
+        raise HTTPException(500, "Неверный/отсутствует X-API-KEY для kinopoisk.dev (401). Проверь переменную окружения.")
     if resp.status_code == 429:
-        raise HTTPException(429, "Превышен лимит запросов kinopoisk.dev. Попробуйте позже.")
+        raise HTTPException(429, "Лимит запросов kinopoisk.dev (429). Попробуйте позже.")
     if resp.status_code >= 400:
-        # отдадим кусочек тела для диагностики
-        raise HTTPException(resp.status_code, f"Ошибка kinopoisk.dev: {resp.text[:300]}")
+        raise HTTPException(resp.status_code, f"Ошибка kinopoisk.dev {resp.status_code}: {resp.text[:300]}")
 
-    # Безопасный парсинг JSON
+    # Если источник ответил не JSON — отдадим диагностический текст вместо падения
+    if "application/json" not in ct:
+        raise HTTPException(502, f"Ожидали JSON, получили {ct}. Фрагмент: {resp.text[:300]}")
+
     try:
         data = resp.json()
     except ValueError:
-        raise HTTPException(500, f"Некорректный JSON от kinopoisk.dev: {resp.text[:300]}")
+        raise HTTPException(502, f"Не удалось распарсить JSON. Фрагмент: {resp.text[:300]}")
 
     docs: List[Dict[str, Any]] = data.get("docs") or []
     items = [simplify(m) for m in docs]
@@ -154,12 +143,11 @@ async def get_movies(
         "limit": data.get("limit", limit),
         "total": data.get("total", len(items)),
         "items": items,
-        # поля для отладки/метрик
         "source_status": resp.status_code,
-        "source_time_ms": elapsed_ms,
+        "source_time_ms": elapsed,
     }
 
-# --- Локальный запуск из PyCharm
+# --- Локальный запуск
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
