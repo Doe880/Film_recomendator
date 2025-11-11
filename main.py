@@ -10,8 +10,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, PlainTextResponse
 
-# --- Загружаем .env (для локальной разработки) ---
-load_dotenv()
+
 
 KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
 if not KINOPOISK_API_KEY:
@@ -199,7 +198,4 @@ async def get_movies(
         "source_time_ms": elapsed_ms,
     }
 
-# --- Локальный запуск из PyCharm ---
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+
