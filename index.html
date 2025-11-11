@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Рекомендатор фильмов</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="container">
+    <h1>🎬 Рекомендатор фильмов</h1>
+    <p class="sub">Выберите жанр и минимальный рейтинг — получайте красивые карточки с постерами.</p>
+  </header>
+
+  <main class="container">
+    <section class="controls">
+      <label>
+        Жанр
+        <input id="genre" type="text" placeholder="например: комедия, драма, боевик" />
+      </label>
+
+      <label class="rating">
+        Минимальный рейтинг: <span id="ratingValue">0.0</span>
+        <input id="minRating" type="range" min="0" max="10" step="0.5" value="0" />
+      </label>
+
+      <button id="searchBtn">Найти фильмы</button>
+    </section>
+
+    <section id="results" class="grid"></section>
+
+    <nav id="pager" class="pager hidden">
+      <button id="prevBtn" disabled>« Назад</button>
+      <span id="pageInfo"></span>
+      <button id="nextBtn">Вперёд »</button>
+    </nav>
+  </main>
+
+  <footer class="container foot">
+    <small>Источник данных: kinopoisk.dev · Демонстрационное приложение</small>
+  </footer>
+
+  <script>
+    // УКАЖИТЕ URL вашего бэкенда на Render:
+    const BACKEND_BASE_URL = "https://movie-api-xxxxx.onrender.com"; // ← замените
+
+    // UI
+    const genreInput = document.getElementById('genre');
+    const ratingInput = document.getElementById('minRating');
+    const ratingValue = document.getElementById('ratingValue');
+    const searchBtn = document.getElementById('searchBtn');
+    const resultsEl = document.getElementById('results');
+    const pagerEl = document.getElementById('pager');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const pageInfo = document.getElementById('pageInfo');
+
+    let currentPage = 1;
+    let totalPages = 1;
+    let lastQuery = { genre: "", minRating: 0 };
+
+    ratingInput.addEventListener('input', () => {
+      ratingValue.textContent = Number(ratingInput.value).toFixed(1);
+    });
+
+    searchBtn.addEventListener('click', () => {
+      currentPage = 1;
+      search();
+    });
+    prevBtn.addEventListener('click', () => {
+      if (currentPage > 1) { currentPage--; search(); }
+    });
+    nextBtn.addEventListener('click', () => {
+      if (currentPage < totalPages) { currentPage++; search(); }
+    });
+
+    async function search() {
+      const genre = genreInput.value.trim();
+      const minRating = Number(ratingInput.value);
+      lastQuery = { genre, minRating };
+
+      if (!genre) {
+        resultsEl.innerHTML = `<div class="empty">Введите жанр (например: комедия)</div>`;
+        pagerEl.classList.add('hidden');
+        return;
+      }
+
+      resultsEl.innerHTML = `<div class="loading">Загрузка фильмов…</div>`;
+
+      const url = new URL(`${BACKEND_BASE_URL}/movies`);
+      url.searchParams.set('genre', genre);
+      url.searchParams.set('min_rating', minRating);
+      url.searchParams.set('page', currentPage);
+      url.searchParams.set('limit', 20);
+
+      try {
+        const resp = await fetch(url.toString());
+        if (!resp.ok) throw new Error(`Ошибка API: ${resp.status}`);
+        const data = await resp.json();
+
+        totalPages = data.pages || 1;
+        renderResults(data.items || []);
+        renderPager();
+      } catch (e) {
+        resultsEl.innerHTML = `<div class="error">Не удалось загрузить фильмы: ${e.message}</div>`;
+        pagerEl.classList.add('hidden');
+      }
+    }
+
+    function renderResults(items) {
+      if (!items.length) {
+        resultsEl.innerHTML = `<div class="empty">Ничего не найдено. Попробуйте другой жанр или снизьте рейтинг.</div>`;
+        return;
+      }
+      resultsEl.innerHTML = items.map(cardHTML).join('');
+    }
+
+    function cardHTML(m) {
+      const poster = m.poster || 'https://via.placeholder.com/300x450?text=Нет+постера';
+      const name = escapeHTML(m.name || 'Без названия');
+      const desc = escapeHTML(m.description || 'Описание отсутствует.');
+      const year = m.year ? ` · ${m.year}` : '';
+      const rating = (m.rating || m.rating === 0) ? `Рейтинг: ${m.rating}` : 'Рейтинг: —';
+      const genres = (m.genres && m.genres.length) ? m.genres.join(', ') : '';
+      const more = m.url ? `<a href="${m.url}" target="_blank" rel="noopener">Страница фильма</a>` : '';
+
+      return `
+        <article class="card">
+          <img src="${poster}" alt="Постер: ${name}" loading="lazy"/>
+          <div class="meta">
+            <h3>${name}<span class="muted">${year}</span></h3>
+            <p class="muted">${genres}</p>
+            <p>${desc}</p>
+            <div class="row">
+              <span class="badge">${rating}</span>
+              ${more}
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderPager() {
+      pagerEl.classList.remove('hidden');
+      pageInfo.textContent = `Страница ${currentPage} из ${totalPages}`;
+      prevBtn.disabled = currentPage <= 1;
+      nextBtn.disabled = currentPage >= totalPages;
+    }
+
+    function escapeHTML(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    // Небольшой стартовый пример
+    genreInput.value = "комедия";
+    ratingInput.value = 6.5; ratingValue.textContent = "6.5";
+    search();
+  </script>
+</body>
+</html>

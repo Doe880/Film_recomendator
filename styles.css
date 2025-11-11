@@ -1,0 +1,37 @@
+:root { --max: 1100px; --gap: 1rem; }
+* { box-sizing: border-box; }
+body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b0c10; color:#e9eef1; }
+a { color: #a4d8ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: var(--max); margin: 0 auto; padding: 1.25rem; }
+header h1 { margin: 0 0 .25rem 0; }
+.sub { color:#9fb0be; margin: 0; }
+
+.controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: var(--gap); align-items: end; margin: 1rem 0 1.25rem; }
+.controls label { display:flex; flex-direction: column; gap:.25rem; font-weight:600; color:#cfe3ef; }
+.controls input[type="text"] { padding:.6rem .7rem; border-radius:.75rem; border:1px solid #2b3440; background:#11151a; color:#e9eef1; }
+.controls input[type="range"] { width:100%; }
+.controls button { padding:.7rem 1rem; border:0; border-radius:.9rem; background:#2563eb; color:#fff; font-weight:700; cursor:pointer; }
+.controls button:hover { filter: brightness(1.1); }
+
+.grid { display:grid; grid-template-columns: repeat( auto-fill, minmax(240px, 1fr) ); gap: var(--gap); }
+.card { background:#11151a; border:1px solid #1f2732; border-radius:1rem; overflow:hidden; display:flex; flex-direction:column; }
+.card img { width:100%; aspect-ratio: 2/3; object-fit: cover; }
+.meta { padding: .8rem .9rem 1rem; display:flex; flex-direction:column; gap:.45rem; }
+h3 { margin:.2rem 0; font-size:1.05rem; }
+.muted { color:#9fb0be; font-weight:400; margin-left:.35rem; }
+.row { display:flex; align-items:center; justify-content:space-between; margin-top:.4rem; }
+.badge { background:#0ea5e9; color:#052534; padding:.2rem .5rem; border-radius:.5rem; font-weight:800; }
+
+.loading, .empty, .error { padding:1rem; background:#11151a; border:1px dashed #2b3440; border-radius:.75rem; color:#cfe3ef; text-align:center; }
+
+.pager { display:flex; align-items:center; gap:.75rem; justify-content:center; margin: 1.25rem 0 2rem; }
+.pager.hidden { display:none; }
+.pager button { padding:.5rem .8rem; border-radius:.7rem; border:1px solid #2b3440; background:#0d1117; color:#e9eef1; cursor:pointer; }
+.pager button:disabled { opacity:.5; cursor:not-allowed; }
+
+.foot { color:#9fb0be; text-align:center; }
+@media (max-width: 720px) {
+  .controls { grid-template-columns: 1fr; }
+}
