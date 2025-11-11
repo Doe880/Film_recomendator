@@ -28,7 +28,7 @@ BASE_URL = "https://api.kinopoisk.dev/v1.4/movie"
 
 
 def simplify(movie: Dict[str, Any]) -> Dict[str, Any]:
-    # Безопасно вытаскиваем поля
+    # Безопасно вытаскиваем поляя
     name = movie.get("name") or movie.get("alternativeName") or "Без названия"
     poster = (movie.get("poster") or {}).get("url")
     rating = None
