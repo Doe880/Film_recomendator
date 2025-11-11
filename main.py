@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, PlainTextResponse
 
-# --- Загружаем .env (локально) ---
+# --- Загружаем .env (для локальной разработки) ---
 load_dotenv()
 
 KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
@@ -41,11 +41,12 @@ async def normalize_slashes(request: Request, call_next):
         request.scope["path"] = re.sub(r"//+", "/", path)
     return await call_next(request)
 
-# --- Утилита: аккуратные ретраи к апстриму и HTTP/1.1 ---
+# --- Утилита: ретраи к апстриму + HTTP/1.1 + следование редиректам ---
 async def fetch_with_retries(url: str, *, params: dict, headers: dict, attempts: int = 3) -> httpx.Response:
     """
     Ретраим сетевые ошибки и 5xx от kinopoisk.dev.
-    Форсим HTTP/1.1 (http2=False) — иногда лечит промежуточные 502.
+    Форсим HTTP/1.1 (http2=False) и включаем follow_redirects=True
+    на случай 301/302/307/308.
     """
     backoff = 0.6
     last_exc: Optional[Exception] = None
@@ -53,7 +54,13 @@ async def fetch_with_retries(url: str, *, params: dict, headers: dict, attempts:
     limits = httpx.Limits(max_keepalive_connections=10, max_connections=20)
     timeout = httpx.Timeout(20.0, connect=10.0, read=10.0)
 
-    async with httpx.AsyncClient(http2=False, limits=limits, timeout=timeout, headers=headers) as client:
+    async with httpx.AsyncClient(
+        http2=False,
+        limits=limits,
+        timeout=timeout,
+        headers=headers,
+        follow_redirects=True,  # ← важно: переходим по 301/302 и т.п.
+    ) as client:
         for attempt in range(1, attempts + 1):
             try:
                 resp = await client.get(url, params=params)
@@ -69,8 +76,7 @@ async def fetch_with_retries(url: str, *, params: dict, headers: dict, attempts:
                 backoff *= 2
 
     if last_exc:
-        raise last_exc  # сеть так и не ожила
-    # теоретически недостижимо, но чтобы mypy не ругался:
+        raise last_exc
     raise HTTPException(502, "Не удалось получить ответ от источника после ретраев.")
 
 # --- Приведение фильма к аккуратному формату ---
@@ -79,7 +85,6 @@ def simplify(movie: Dict[str, Any]) -> Dict[str, Any]:
     poster = (movie.get("poster") or {}).get("url")
     rating = None
     rating_block = movie.get("rating") or {}
-    # пытаемся взять kp → imdb → filmCritics → await
     for key in ("kp", "imdb", "filmCritics", "await"):
         val = rating_block.get(key)
         if isinstance(val, (int, float)):
