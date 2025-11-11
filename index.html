@@ -41,7 +41,8 @@
   </footer>
 
   <script>
-    const BACKEND_BASE_URL = "https://film-recomendator.onrender.com/"
+    const BACKEND_BASE_URL = "https://film-recomendator.onrender.com";
+    const url = new URL(`${BACKEND_BASE_URL}/movies`);
     const genreInput = document.getElementById('genre');
     const ratingInput = document.getElementById('minRating');
     const ratingValue = document.getElementById('ratingValue');
