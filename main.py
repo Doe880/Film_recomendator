@@ -20,6 +20,13 @@ if not KINOPOISK_API_KEY:
 # --- Константы ---
 BASE_URL = "https://api.kinopoisk.dev/v1.4/movie"
 
+# Поля, разрешённые в v1.4 (без webUrl). Этого достаточно для карточек.
+SELECT_FIELDS = [
+    "id", "type", "name", "alternativeName",
+    "description", "shortDescription",
+    "year", "rating", "genres", "poster", "externalId"
+]
+
 app = FastAPI(title="Movie Recommender (Kinopoisk.dev)")
 
 # --- CORS ---
@@ -29,11 +36,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins if allowed_origins != ["*"] else ["*"],
     allow_credentials=False,
-    allow_methods=["GET", "OPTIONS"],  # OPTIONS для preflight
+    allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# --- Middleware: схлопываем повторные слэши в пути (/movies vs //movies) ---
+# --- Middleware: схлопываем повторные слэши (/movies vs //movies) ---
 @app.middleware("http")
 async def normalize_slashes(request: Request, call_next):
     path = request.scope.get("path", "")
@@ -41,13 +48,8 @@ async def normalize_slashes(request: Request, call_next):
         request.scope["path"] = re.sub(r"//+", "/", path)
     return await call_next(request)
 
-# --- Утилита: ретраи к апстриму + HTTP/1.1 + следование редиректам ---
+# --- Ретраи к апстриму + HTTP/1.1 + follow_redirects ---
 async def fetch_with_retries(url: str, *, params: dict, headers: dict, attempts: int = 3) -> httpx.Response:
-    """
-    Ретраим сетевые ошибки и 5xx от kinopoisk.dev.
-    Форсим HTTP/1.1 (http2=False) и включаем follow_redirects=True
-    на случай 301/302/307/308.
-    """
     backoff = 0.6
     last_exc: Optional[Exception] = None
 
@@ -59,13 +61,12 @@ async def fetch_with_retries(url: str, *, params: dict, headers: dict, attempts:
         limits=limits,
         timeout=timeout,
         headers=headers,
-        follow_redirects=True,  # ← важно: переходим по 301/302 и т.п.
+        follow_redirects=True,  # важно: ходим за 301/302
     ) as client:
-        for attempt in range(1, attempts + 1):
+        for _ in range(attempts):
             try:
                 resp = await client.get(url, params=params)
                 if resp.status_code >= 500:
-                    # временные 5xx — подретраим
                     await asyncio.sleep(backoff)
                     backoff *= 2
                     continue
@@ -95,27 +96,38 @@ def simplify(movie: Dict[str, Any]) -> Dict[str, Any]:
     year = movie.get("year")
     genres = [g.get("name") for g in (movie.get("genres") or []) if g.get("name")]
 
+    # Формируем кликабельную ссылку на Кинопоиск сами (в v1.4 нет webUrl)
+    kp_id = movie.get("id")
+    mtype = movie.get("type")  # movie, tv-series, cartoon, etc.
+    # На Кинопоиске основные типы: film (для кино), series (для сериалов)
+    if mtype == "tv-series":
+        kp_url = f"https://www.kinopoisk.ru/series/{kp_id}/" if kp_id else None
+    else:
+        kp_url = f"https://www.kinopoisk.ru/film/{kp_id}/" if kp_id else None
+
+    # альтернативная ссылка из externalId (если есть kpHD)
+    kp_hd = (movie.get("externalId") or {}).get("kpHD")
+    url = kp_url or kp_hd
+
     return {
-        "id": movie.get("id") or movie.get("_id"),
+        "id": kp_id,
         "name": name,
         "poster": poster,
         "rating": rating,
         "description": description,
         "year": year,
         "genres": genres,
-        "url": movie.get("webUrl") or movie.get("externalId", {}).get("kpHD"),
+        "url": url,
     }
 
 # --- Служебные маршруты ---
 @app.get("/", include_in_schema=False)
 def root():
-    # Редирект на Swagger, чтобы убрать 404 в логах при заходах на корень
     return RedirectResponse("/docs")
 
 @app.get("/favicon.ico", include_in_schema=False)
 @app.get("/favicon.png", include_in_schema=False)
 def favicon():
-    # Уберём «шумные» 404 от браузеров/сканеров
     return PlainTextResponse("", status_code=204)
 
 @app.get("/robots.txt", include_in_schema=False)
@@ -134,18 +146,11 @@ async def get_movies(
     page: int = Query(1, ge=1, description="Страница результатов (пагинация)"),
     limit: int = Query(20, ge=1, le=50, description="Размер страницы (1-50)")
 ):
-    """
-    Возвращает список фильмов по жанру и фильтру по рейтингу. Метаданные — на русском.
-    """
-    # Параметры для kinopoisk.dev
     query_params = {
         "page": page,
         "limit": limit,
         "genres.name": genre,
-        "selectFields": ",".join([
-            "id", "name", "alternativeName", "poster", "rating",
-            "description", "shortDescription", "year", "genres", "webUrl", "externalId"
-        ]),
+        "selectFields": ",".join(SELECT_FIELDS),
         "sortField": "rating.kp",
         "sortType": "-1",
     }
@@ -162,11 +167,9 @@ async def get_movies(
     try:
         resp = await fetch_with_retries(BASE_URL, params=query_params, headers=headers, attempts=3)
     except httpx.RequestError as e:
-        # сетевые проблемы/таймауты
         raise HTTPException(status_code=502, detail=f"Сеть/таймаут до kinopoisk.dev: {e}") from e
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
-    # Явные статусы источника
     if resp.status_code == 401:
         raise HTTPException(500, "Неверный/отсутствует X-API-KEY для kinopoisk.dev (401). Проверь переменную окружения.")
     if resp.status_code == 429:
@@ -174,7 +177,6 @@ async def get_movies(
     if resp.status_code >= 400:
         raise HTTPException(resp.status_code, f"Ошибка kinopoisk.dev {resp.status_code}: {resp.text[:300]}")
 
-    # Контент должен быть JSON
     ct = resp.headers.get("content-type", "")
     if "application/json" not in ct:
         raise HTTPException(502, f"Ожидали JSON, получили {ct}. Фрагмент: {resp.text[:300]}")
@@ -193,7 +195,6 @@ async def get_movies(
         "limit": data.get("limit", limit),
         "total": data.get("total", len(items)),
         "items": items,
-        # метрики для быстрой диагностики во фронте
         "source_status": resp.status_code,
         "source_time_ms": elapsed_ms,
     }
