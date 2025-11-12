@@ -9,14 +9,54 @@
 <body>
   <header class="container">
     <h1>🎬 Рекомендатор фильмов</h1>
-    <p class="sub">Выберите жанр и минимальный рейтинг — получайте красивые карточки с постерами.</p>
+    <p class="sub">Выберите жанр, страну, год и минимальный рейтинг — получите карточки с постерами.</p>
   </header>
 
   <main class="container">
     <section class="controls">
       <label>
         Жанр
-        <input id="genre" type="text" placeholder="например: комедия, драма, боевик" />
+        <select id="genre">
+          <option value="комедия">Комедия</option>
+          <option value="драма">Драма</option>
+          <option value="боевик">Боевик</option>
+          <option value="триллер">Триллер</option>
+          <option value="фантастика">Фантастика</option>
+          <option value="фэнтези">Фэнтези</option>
+          <option value="криминал">Криминал</option>
+          <option value="мелодрама">Мелодрама</option>
+          <option value="ужасы">Ужасы</option>
+          <option value="приключения">Приключения</option>
+          <option value="аниме">Аниме</option>
+          <option value="семейный">Семейный</option>
+          <option value="история">История</option>
+          <option value="биография">Биография</option>
+          <option value="детектив">Детектив</option>
+        </select>
+      </label>
+
+      <label>
+        Страна
+        <select id="country">
+          <option value="">Любая</option>
+          <option value="Россия">Россия</option>
+          <option value="США">США</option>
+          <option value="Великобритания">Великобритания</option>
+          <option value="Франция">Франция</option>
+          <option value="Германия">Германия</option>
+          <option value="Япония">Япония</option>
+          <option value="Южная Корея">Южная Корея</option>
+          <option value="Индия">Индия</option>
+          <option value="Италия">Италия</option>
+          <option value="Испания">Испания</option>
+          <option value="Китай">Китай</option>
+          <option value="Канада">Канада</option>
+        </select>
+      </label>
+
+      <label>
+        Год выпуска (точно)
+        <input id="year" type="number" min="1888" max="2100" placeholder="например: 2020" />
       </label>
 
       <label class="rating">
@@ -41,9 +81,12 @@
   </footer>
 
   <script>
-    const BACKEND_BASE_URL = "https://film-recomendator.onrender.com";
-    const url = new URL(`${BACKEND_BASE_URL}/movies`);
-    const genreInput = document.getElementById('genre');
+    // УКАЖИ URL своего бэкенда (можно с / на конце — мы склеим безопасно):
+    const BACKEND_BASE_URL = "https://film-recomendator.onrender.com/";
+
+    const genreSelect = document.getElementById('genre');
+    const countrySelect = document.getElementById('country');
+    const yearInput = document.getElementById('year');
     const ratingInput = document.getElementById('minRating');
     const ratingValue = document.getElementById('ratingValue');
     const searchBtn = document.getElementById('searchBtn');
@@ -55,7 +98,6 @@
 
     let currentPage = 1;
     let totalPages = 1;
-    let lastQuery = { genre: "", minRating: 0 };
 
     ratingInput.addEventListener('input', () => {
       ratingValue.textContent = Number(ratingInput.value).toFixed(1);
@@ -73,41 +115,48 @@
     });
 
     async function search() {
-      const genre = genreInput.value.trim();
+      const genre = genreSelect.value;
       const minRating = Number(ratingInput.value);
-      lastQuery = { genre, minRating };
+      const country = countrySelect.value;
+      const year = yearInput.value.trim();
 
       if (!genre) {
-        resultsEl.innerHTML = `<div class="empty">Введите жанр (например: комедия)</div>`;
+        resultsEl.innerHTML = `<div class="empty">Выберите жанр</div>`;
         pagerEl.classList.add('hidden');
         return;
       }
 
       resultsEl.innerHTML = `<div class="loading">Загрузка фильмов…</div>`;
 
-      const url = new URL(`${BACKEND_BASE_URL}/movies`);
+      // Склеиваем путь безопасно, чтобы не было //movies
+      const url = new URL('/movies', BACKEND_BASE_URL);
       url.searchParams.set('genre', genre);
       url.searchParams.set('min_rating', minRating);
       url.searchParams.set('page', currentPage);
       url.searchParams.set('limit', 20);
+      if (country) url.searchParams.set('country', country);
+      if (year) url.searchParams.set('year', parseInt(year, 10));
 
       try {
         const resp = await fetch(url.toString());
-        if (!resp.ok) throw new Error(`Ошибка API: ${resp.status}`);
+        if (!resp.ok) {
+          const text = await resp.text();
+          throw new Error(`Ошибка API (${resp.status}): ${text}`);
+        }
         const data = await resp.json();
 
         totalPages = data.pages || 1;
         renderResults(data.items || []);
         renderPager();
       } catch (e) {
-        resultsEl.innerHTML = `<div class="error">Не удалось загрузить фильмы: ${e.message}</div>`;
+        resultsEl.innerHTML = `<div class="error">Не удалось загрузить фильмы: ${escapeHTML(e.message)}</div>`;
         pagerEl.classList.add('hidden');
       }
     }
 
     function renderResults(items) {
       if (!items.length) {
-        resultsEl.innerHTML = `<div class="empty">Ничего не найдено. Попробуйте другой жанр или снизьте рейтинг.</div>`;
+        resultsEl.innerHTML = `<div class="empty">Ничего не найдено. Попробуйте ослабить фильтры.</div>`;
         return;
       }
       resultsEl.innerHTML = items.map(cardHTML).join('');
@@ -149,9 +198,11 @@
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
 
-    // Небольшой стартовый пример
-    genreInput.value = "комедия";
+    // Стартовые значения
+    genreSelect.value = "комедия";
+    countrySelect.value = "";
     ratingInput.value = 6.5; ratingValue.textContent = "6.5";
+    yearInput.value = "";
     search();
   </script>
 </body>

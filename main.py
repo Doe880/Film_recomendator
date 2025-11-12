@@ -5,12 +5,13 @@ import asyncio
 from typing import Optional, List, Dict, Any
 
 import httpx
-
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, PlainTextResponse
 
-
+# --- Загружаем .env локально ---
+load_dotenv()
 
 KINOPOISK_API_KEY = os.getenv("KINOPOISK_API_KEY")
 if not KINOPOISK_API_KEY:
@@ -18,13 +19,6 @@ if not KINOPOISK_API_KEY:
 
 # --- Константы ---
 BASE_URL = "https://api.kinopoisk.dev/v1.4/movie"
-
-# Поля, разрешённые в v1.4 (без webUrl). Этого достаточно для карточек.
-SELECT_FIELDS = [
-    "id", "type", "name", "alternativeName",
-    "description", "shortDescription",
-    "year", "rating", "genres", "poster", "externalId"
-]
 
 app = FastAPI(title="Movie Recommender (Kinopoisk.dev)")
 
@@ -35,7 +29,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins if allowed_origins != ["*"] else ["*"],
     allow_credentials=False,
-    allow_methods=["GET", "OPTIONS"],
+    allow_methods=["GET", "OPTIONS"],   # OPTIONS для preflight
     allow_headers=["*"],
 )
 
@@ -47,7 +41,7 @@ async def normalize_slashes(request: Request, call_next):
         request.scope["path"] = re.sub(r"//+", "/", path)
     return await call_next(request)
 
-# --- Ретраи к апстриму + HTTP/1.1 + follow_redirects ---
+# --- Ретраи + HTTP/1.1 + follow_redirects ---
 async def fetch_with_retries(url: str, *, params: dict, headers: dict, attempts: int = 3) -> httpx.Response:
     backoff = 0.6
     last_exc: Optional[Exception] = None
@@ -60,7 +54,7 @@ async def fetch_with_retries(url: str, *, params: dict, headers: dict, attempts:
         limits=limits,
         timeout=timeout,
         headers=headers,
-        follow_redirects=True,  # важно: ходим за 301/302
+        follow_redirects=True,  # важно: 301/302/307/308
     ) as client:
         for _ in range(attempts):
             try:
@@ -95,16 +89,13 @@ def simplify(movie: Dict[str, Any]) -> Dict[str, Any]:
     year = movie.get("year")
     genres = [g.get("name") for g in (movie.get("genres") or []) if g.get("name")]
 
-    # Формируем кликабельную ссылку на Кинопоиск сами (в v1.4 нет webUrl)
+    # В v1.4 нет webUrl — сформируем ссылку сами по id/type
     kp_id = movie.get("id")
-    mtype = movie.get("type")  # movie, tv-series, cartoon, etc.
-    # На Кинопоиске основные типы: film (для кино), series (для сериалов)
+    mtype = movie.get("type")
     if mtype == "tv-series":
         kp_url = f"https://www.kinopoisk.ru/series/{kp_id}/" if kp_id else None
     else:
         kp_url = f"https://www.kinopoisk.ru/film/{kp_id}/" if kp_id else None
-
-    # альтернативная ссылка из externalId (если есть kpHD)
     kp_hd = (movie.get("externalId") or {}).get("kpHD")
     url = kp_url or kp_hd
 
@@ -137,23 +128,32 @@ def robots():
 async def health():
     return {"status": "ok"}
 
-# --- Основной эндпоинт ---
+# --- Основной эндпоинт: добавлены country и year ---
 @app.get("/movies")
 async def get_movies(
     genre: str = Query(..., description="Жанр на русском, например: комедия"),
     min_rating: Optional[float] = Query(0.0, ge=0.0, le=10.0, description="Минимальный рейтинг (0-10)"),
+    country: Optional[str] = Query(None, description="Страна на русском, например: США"),
+    year: Optional[int] = Query(None, ge=1888, le=2100, description="Год выпуска, например: 2020"),
     page: int = Query(1, ge=1, description="Страница результатов (пагинация)"),
     limit: int = Query(20, ge=1, le=50, description="Размер страницы (1-50)")
 ):
+    """
+    Возвращает список фильмов по жанру, стране, году и минимальному рейтингу.
+    """
     query_params = {
         "page": page,
         "limit": limit,
-        "genres.name": genre,
+        "genres.name": genre,   # жанр на русском
         "sortField": "rating.kp",
         "sortType": "-1",
     }
     if min_rating is not None and min_rating > 0:
         query_params["rating.kp"] = f"{min_rating}-10"
+    if country:
+        query_params["countries.name"] = country  # страны на русском
+    if year is not None:
+        query_params["year"] = str(year)          # точный год
 
     headers = {
         "X-API-KEY": KINOPOISK_API_KEY,
@@ -197,4 +197,7 @@ async def get_movies(
         "source_time_ms": elapsed_ms,
     }
 
-
+# --- Локальный запуск из PyCharm ---
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
