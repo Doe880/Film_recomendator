@@ -149,7 +149,6 @@ async def get_movies(
         "page": page,
         "limit": limit,
         "genres.name": genre,
-        "selectFields": ",".join(SELECT_FIELDS),
         "sortField": "rating.kp",
         "sortType": "-1",
     }
